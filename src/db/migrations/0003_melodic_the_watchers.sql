@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX IF NOT EXISTS "company_checklist_status_company_item_unique" ON "company_checklist_status" USING btree ("company_id","checklist_item_id");

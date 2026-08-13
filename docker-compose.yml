@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: plataforma-documentos-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: plataforma_documentos
+    ports:
+      # Host 5434 -> container 5432 para no chocar con otros Postgres
+      # locales/Docker ya escuchando en 5432/5433 en esta máquina.
+      - "5434:5432"
+    volumes:
+      - plataforma_documentos_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # S3 compatible para desarrollo local (reemplaza a AWS S3/Cloudflare R2 en
+  # dev). Credenciales fijas de desarrollo, no usar en producción. Ver
+  # README.md, sección "Almacenamiento de archivos (S3/MinIO)" para cómo
+  # apuntar las variables S3_* de .env hacia este servicio.
+  minio:
+    image: minio/minio:latest
+    container_name: plataforma-documentos-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_REGION: us-east-1
+    command: server /data --console-address ":9001"
+    ports:
+      # 9000 = API S3 (lo que usa el backend). 9001 = consola web
+      # (http://localhost:9001, login con las credenciales de arriba).
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - plataforma_documentos_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Job de un solo uso: crea el bucket y lo deja de lectura pública (el
+  # backend arma URLs públicas directas vía S3_PUBLIC_URL, no prefirmadas de
+  # descarga — ver publicUrlFor en src/lib/s3.ts). Corre y termina; no es un
+  # servicio de larga duración.
+  minio-init:
+    image: minio/mc:latest
+    container_name: plataforma-documentos-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      (mc mb local/plataforma-documentos || true) &&
+      mc anonymous set download local/plataforma-documentos
+      "
+
+volumes:
+  plataforma_documentos_pgdata:
+  plataforma_documentos_minio_data:

@@ -1,0 +1,16 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.git
+.gitignore
+drizzle
+README.md
+ARCHITECTURE.md
+PROMPTS.md
+PROMPT_SWAGGER_CSS_FIX.md
+PROMPT_SWAGGER_FIX.md
+PROMPT_SWAGGER_REVERT_SCALAR.md

@@ -1,0 +1,34 @@
+# Compose de PRODUCCIÓN (EC2 + RDS).
+#
+# Solo trae el servicio de la app: la base de datos vive en RDS Postgres
+# (fuera de este host, ver DATABASE_URL en .env) y no hay MinIO — el
+# almacenamiento de archivos apunta al bucket S3 real vía las variables S3_*.
+#
+# Para desarrollo local sigue usándose docker-compose.yml (Postgres + MinIO).
+#
+# Uso:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Requiere un archivo .env en este mismo directorio (nunca commiteado, ver
+# README.md sección "Despliegue en EC2" para el checklist de variables).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: alimentia-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      # Solo loopback: el servicio no queda expuesto directo a internet,
+      # únicamente a través de Nginx (puerto 80/443) corriendo nativo en
+      # el mismo EC2. Si PORT cambia en .env, ajusta también este mapeo.
+      - "127.0.0.1:3001:3001"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
