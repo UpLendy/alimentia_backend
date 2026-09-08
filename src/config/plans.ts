@@ -16,10 +16,11 @@ export type FeatureKey =
   | "white_label"; // modo aliado / consultor externo
 
 export const PLAN_FEATURES: Record<Plan, FeatureKey[]> = {
-  // Básico solo trae lo incluido por defecto para todos los planes (saneamiento,
-  // formatos diarios, documentación fija, alarmas básicas, tablero global) —
-  // ninguna de las FeatureKey de arriba aplica.
-  basico: [],
+  // Básico trae lo incluido por defecto para todos los planes (saneamiento,
+  // formatos diarios, documentación fija, alarmas básicas, tablero global)
+  // más no_conformidades: es un control crucial de BPM y se ofrece desde el
+  // plan de entrada, no como upsell.
+  basico: ["no_conformidades"],
   pro: [
     "tablero_desagregado",
     "trazabilidad_recall",
