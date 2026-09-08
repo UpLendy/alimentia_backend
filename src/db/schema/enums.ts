@@ -78,3 +78,8 @@ export const nonConformityStatusEnum = pgEnum("non_conformity_status", ["abierta
 // ── Checklist maestro (perfiles) ────────────────────────────────────────────
 
 export const checklistStatusEnum = pgEnum("checklist_item_status", ["pendiente", "en_desarrollo", "completo"]);
+
+// ── Tickets (reporte interno de bugs/mejoras durante pruebas) ──────────────
+
+export const ticketTypeEnum = pgEnum("ticket_type", ["bug", "mejora", "duda"]);
+export const ticketStatusEnum = pgEnum("ticket_status", ["abierto", "en_progreso", "resuelto"]);
