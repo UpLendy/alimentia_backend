@@ -68,6 +68,7 @@ const app = new Elysia()
           { name: "Checklist", description: "Checklist Maestro: catálogo de referencia y avance por empresa cliente (panel interno BPM Consulting)." },
           { name: "Signatures", description: "Firmas electrónicas con auditoría (usuario, fecha, IP y hash) sobre otras entidades." },
           { name: "Reports", description: "Reportes agregados (actas de inspección en PDF) — feature de plan Pro/Plus." },
+          { name: "Tickets", description: "Reporte interno de bugs/mejoras/dudas detectados al usar la plataforma (panel interno BPM Consulting)." },
         ],
         components: {
           securitySchemes: {
