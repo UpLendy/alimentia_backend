@@ -10,6 +10,7 @@ import {
   notifications,
   sedes,
   signatures,
+  tickets,
   trainings,
   users,
 } from "../db/schema";
@@ -30,6 +31,7 @@ import { trainingsRoutes } from "../modules/trainings/http/trainings.routes";
 import { checklistRoutes } from "../modules/checklist/http/checklist.routes";
 import { signaturesRoutes } from "../modules/signatures/http/signatures.routes";
 import { reportsRoutes } from "../modules/reports/http/reports.routes";
+import { ticketsRoutes } from "../modules/tickets/http/tickets.routes";
 import { sedesRoutes } from "../modules/sedes/http/sedes.routes";
 import { errorHandler } from "../plugins/error-handler";
 import type { Plan } from "../config/plans";
@@ -57,7 +59,8 @@ const app = new Elysia()
   .use(trainingsRoutes)
   .use(checklistRoutes)
   .use(signaturesRoutes)
-  .use(reportsRoutes);
+  .use(reportsRoutes)
+  .use(ticketsRoutes);
 
 async function request(method: string, path: string, opts: { token?: string; body?: unknown } = {}) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -80,6 +83,11 @@ interface Tenant {
   adminToken: string;
   employeeId: string;
   equipmentId: string;
+  // Segundo usuario de la misma empresa (rol operario), usado para probar
+  // que un usuario normal solo ve SUS PROPIOS tickets — ni siquiera el admin
+  // de su misma empresa ve los de otro (ver describe("Tickets...")).
+  operarioToken: string;
+  operarioUserId: string;
 }
 
 const seededCompanyIds: string[] = [];
@@ -113,6 +121,25 @@ async function seedTenant(label: string, plan: Plan = "pro"): Promise<Tenant> {
   }
   const adminToken = (login.json as { token: string }).token;
 
+  const operarioEmail = `operario-${label.toLowerCase()}-${crypto.randomUUID()}@test.local`;
+  const [operarioUser] = await db
+    .insert(users)
+    .values({
+      companyId: company!.id,
+      sedeId: sede!.id,
+      fullName: `Operario ${label}`,
+      email: operarioEmail,
+      passwordHash: await hashPassword(password),
+      role: "operario",
+    })
+    .returning();
+
+  const operarioLogin = await request("POST", "/auth/login", { body: { email: operarioEmail, password } });
+  if (operarioLogin.status !== 200) {
+    throw new Error(`No se pudo autenticar el operario semilla de ${label}: ${JSON.stringify(operarioLogin.json)}`);
+  }
+  const operarioToken = (operarioLogin.json as { token: string }).token;
+
   const [employee] = await db
     .insert(employees)
     .values({
@@ -142,6 +169,8 @@ async function seedTenant(label: string, plan: Plan = "pro"): Promise<Tenant> {
     adminToken,
     employeeId: employee!.id,
     equipmentId: equipmentRow!.id,
+    operarioToken,
+    operarioUserId: operarioUser!.id,
   };
 }
 
@@ -550,27 +579,23 @@ describe("aislamiento multi-tenant", () => {
   // No Conformidades e Incidentes (CAPA) completo (lecturas incluidas)
   // requiere plan Pro/Plus — requireQualityPlan corre antes de cualquier
   // otra validación en los 8 casos de uso del módulo.
-  test("en plan básico, todos los endpoints de /non-conformities e /incidents devuelven 403", async () => {
-    const fakeId = crypto.randomUUID();
-    const cases: { method: string; path: string; body?: unknown }[] = [
-      { method: "GET", path: "/non-conformities" },
-      { method: "GET", path: `/non-conformities/${fakeId}` },
-      { method: "POST", path: "/non-conformities", body: { sedeId: fakeId, description: "Hallazgo básico" } },
-      { method: "PATCH", path: `/non-conformities/${fakeId}`, body: { description: "Actualizado" } },
-      { method: "PATCH", path: `/non-conformities/${fakeId}/close`, body: { correctiveAction: "Acción" } },
-      { method: "GET", path: "/incidents" },
-      { method: "GET", path: `/incidents/${fakeId}` },
-      {
-        method: "POST",
-        path: "/incidents",
-        body: { sedeId: fakeId, description: "Incidente básico", occurredAt: "2024-01-01T00:00:00Z" },
-      },
-    ];
+  // No conformidades/CAPA se movió al plan de entrada (ver comentario en
+  // requireQualityPlan y PLAN_FEATURES.basico en src/config/plans.ts): es un
+  // control BPM esencial, no un upsell. Este test antes esperaba 403 para
+  // Básico; ahora verifica lo contrario a propósito, para no perder cobertura
+  // de la regla vigente.
+  test("en plan básico, /non-conformities e /incidents están disponibles (no_conformidades incluida desde el plan de entrada)", async () => {
+    const getNc = await request("GET", "/non-conformities", { token: tenantBasico.adminToken });
+    expect(getNc.status).toBe(200);
 
-    for (const { method, path, body } of cases) {
-      const res = await request(method, path, { token: tenantBasico.adminToken, body });
-      expect(res.status).toBe(403);
-    }
+    const getInc = await request("GET", "/incidents", { token: tenantBasico.adminToken });
+    expect(getInc.status).toBe(200);
+
+    const postNc = await request("POST", "/non-conformities", {
+      token: tenantBasico.adminToken,
+      body: { sedeId: tenantBasico.sedeId, description: "Hallazgo básico" },
+    });
+    expect(postNc.status).toBe(200);
   });
 
   // Notifications no tiene endpoint de creación propio (las filas las crea
@@ -967,5 +992,121 @@ describe("Reportes (actas de inspección en PDF)", () => {
       body: { sedeId: tenantA.sedeId, from: "2024-02-01", to: "2024-01-01" },
     });
     expect(res.status).toBe(400);
+  });
+});
+
+// Tickets: herramienta interna para reportar bugs/mejoras/dudas durante las
+// pruebas de la plataforma. Sin feature-gating (por diseño: no es un módulo
+// del producto) y con una regla de visibilidad distinta a todo lo demás en
+// este archivo — no es "por empresa" sino "por usuario creador", salvo para
+// bpm_admin que ve todo.
+describe("Tickets (reporte interno)", () => {
+  test("POST /tickets funciona para cualquier rol y cualquier plan", async () => {
+    const asAdminPro = await request("POST", "/tickets", {
+      token: tenantA.adminToken,
+      body: { title: "Botón roto", description: "El botón no responde", type: "bug", pageContext: "/formatos/higiene" },
+    });
+    expect(asAdminPro.status).toBe(200);
+
+    const asOperarioBasico = await request("POST", "/tickets", {
+      token: tenantBasico.operarioToken,
+      body: { title: "Idea de mejora", description: "Sería útil...", type: "mejora", pageContext: "/personal" },
+    });
+    expect(asOperarioBasico.status).toBe(200);
+    const ticket = (asOperarioBasico.json as { ticket: { companyId: string; status: string } }).ticket;
+    expect(ticket.companyId).toBe(tenantBasico.companyId);
+    expect(ticket.status).toBe("abierto");
+  });
+
+  test("un usuario normal solo ve los tickets que él mismo creó, ni siquiera los de otro usuario de su misma empresa", async () => {
+    await request("POST", "/tickets", {
+      token: tenantA.adminToken,
+      body: { title: "Ticket del admin A", description: "Descripción de prueba", type: "duda", pageContext: "/x" },
+    });
+    await request("POST", "/tickets", {
+      token: tenantA.operarioToken,
+      body: { title: "Ticket del operario A", description: "Descripción de prueba", type: "duda", pageContext: "/y" },
+    });
+
+    const asAdmin = await request("GET", "/tickets", { token: tenantA.adminToken });
+    expect(asAdmin.status).toBe(200);
+    const adminTitles = (asAdmin.json as { title: string }[]).map((t) => t.title);
+    expect(adminTitles).toContain("Ticket del admin A");
+    expect(adminTitles).not.toContain("Ticket del operario A");
+
+    const asOperario = await request("GET", "/tickets", { token: tenantA.operarioToken });
+    expect(asOperario.status).toBe(200);
+    const operarioTitles = (asOperario.json as { title: string }[]).map((t) => t.title);
+    expect(operarioTitles).toContain("Ticket del operario A");
+    expect(operarioTitles).not.toContain("Ticket del admin A");
+  });
+
+  test("aislamiento multi-tenant: un usuario de la empresa A no ve tickets de la empresa B", async () => {
+    await request("POST", "/tickets", {
+      token: tenantB.adminToken,
+      body: { title: "Ticket exclusivo de B", description: "Descripción de prueba", type: "bug", pageContext: "/z" },
+    });
+
+    const asAdminA = await request("GET", "/tickets", { token: tenantA.adminToken });
+    const titlesA = (asAdminA.json as { title: string }[]).map((t) => t.title);
+    expect(titlesA).not.toContain("Ticket exclusivo de B");
+  });
+
+  test("bpm_admin ve tickets de todas las empresas, puede filtrar por status/type y cambiar el status", async () => {
+    const created = await request("POST", "/tickets", {
+      token: tenantA.adminToken,
+      body: { title: "Ticket para revisión bpm_admin", description: "Descripción de prueba", type: "bug", pageContext: "/w" },
+    });
+    const ticketId = (created.json as { ticket: { id: string } }).ticket.id;
+
+    const allTickets = await request("GET", "/tickets", { token: bpmAdminToken });
+    expect(allTickets.status).toBe(200);
+    const allIds = (allTickets.json as { id: string; companyId: string | null }[]).map((t) => t.id);
+    expect(allIds).toContain(ticketId);
+    // bpm_admin ve tickets de tenantA y de tenantB simultáneamente (no está
+    // limitado a una sola empresa como los demás roles).
+    const companyIds = new Set((allTickets.json as { companyId: string | null }[]).map((t) => t.companyId));
+    expect(companyIds.has(tenantA.companyId)).toBe(true);
+    expect(companyIds.has(tenantB.companyId)).toBe(true);
+
+    const filteredByType = await request("GET", "/tickets?type=bug&status=abierto", { token: bpmAdminToken });
+    expect(filteredByType.status).toBe(200);
+    for (const t of filteredByType.json as { type: string; status: string }[]) {
+      expect(t.type).toBe("bug");
+      expect(t.status).toBe("abierto");
+    }
+
+    const patchRes = await request("PATCH", `/tickets/${ticketId}`, {
+      token: bpmAdminToken,
+      body: { status: "en_progreso" },
+    });
+    expect(patchRes.status).toBe(200);
+    expect((patchRes.json as { ticket: { status: string } }).ticket.status).toBe("en_progreso");
+  });
+
+  test("un usuario normal recibe 403 al intentar PATCH /tickets/:id, incluso sobre su propio ticket", async () => {
+    const created = await request("POST", "/tickets", {
+      token: tenantA.adminToken,
+      body: { title: "Ticket propio, no debería poder cerrarlo el mismo admin", description: "Descripción de prueba", type: "duda", pageContext: "/v" },
+    });
+    const ticketId = (created.json as { ticket: { id: string } }).ticket.id;
+
+    const asOwnAdmin = await request("PATCH", `/tickets/${ticketId}`, {
+      token: tenantA.adminToken,
+      body: { status: "resuelto" },
+    });
+    expect(asOwnAdmin.status).toBe(403);
+
+    const asOtherCompanyAdmin = await request("PATCH", `/tickets/${ticketId}`, {
+      token: tenantB.adminToken,
+      body: { status: "resuelto" },
+    });
+    expect(asOtherCompanyAdmin.status).toBe(403);
+
+    const asOperario = await request("PATCH", `/tickets/${ticketId}`, {
+      token: tenantA.operarioToken,
+      body: { status: "resuelto" },
+    });
+    expect(asOperario.status).toBe(403);
   });
 });

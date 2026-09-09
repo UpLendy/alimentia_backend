@@ -23,6 +23,7 @@ import { notificationsRoutes } from "./modules/notifications/http/notifications.
 import { checklistRoutes } from "./modules/checklist/http/checklist.routes";
 import { signaturesRoutes } from "./modules/signatures/http/signatures.routes";
 import { reportsRoutes } from "./modules/reports/http/reports.routes";
+import { ticketsRoutes } from "./modules/tickets/http/tickets.routes";
 import { startCheckAlertsJob } from "./jobs/check-alerts";
 
 const app = new Elysia()
@@ -105,6 +106,7 @@ const app = new Elysia()
   .use(checklistRoutes)
   .use(signaturesRoutes)
   .use(reportsRoutes)
+  .use(ticketsRoutes)
   .listen(env.port);
 
 // Job en proceso (setInterval, ver comentario en src/jobs/check-alerts.ts

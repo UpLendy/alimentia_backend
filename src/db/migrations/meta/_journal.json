@@ -29,6 +29,13 @@
       "when": 1783972328917,
       "tag": "0003_melodic_the_watchers",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788876442719,
+      "tag": "0004_pretty_salo",
+      "breakpoints": true
     }
   ]
 }
